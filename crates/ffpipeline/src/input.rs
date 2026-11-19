@@ -28,6 +28,9 @@ pub struct InputSettings {
     pub video_copy_seek: Option<CopySeek>,
     /// Blockers that need a dry run, so only the caller can find them
     pub video_copy_blockers: Vec<CopyBlocker>,
+    /// Source stream for each audio track after the primary, read from `audio_input`.
+    /// `None`, or an index the source doesn't have, fills that track with silence.
+    pub extra_audio_indices: Vec<Option<u32>>,
 }
 
 impl InputSettings {

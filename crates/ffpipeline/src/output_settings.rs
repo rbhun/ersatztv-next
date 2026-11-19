@@ -158,6 +158,17 @@ pub struct AudioOutputSettings {
     /// `None` always transcodes
     pub copy: Option<CopyPolicy<String>>,
     pub transcode: AudioTranscodeSettings,
+    /// Output audio tracks in order. The first entry describes the primary track; each further
+    /// entry adds a track filled from `InputSettings::extra_audio_indices` or with silence.
+    /// Empty outputs only the primary track, without metadata.
+    pub tracks: Vec<AudioTrackMetadata>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AudioTrackMetadata {
+    /// ISO 639-2 language code written to the stream, e.g. `eng`.
+    pub language: Option<String>,
+    pub title: Option<String>,
 }
 
 #[derive(Debug)]

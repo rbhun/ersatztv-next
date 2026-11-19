@@ -1,5 +1,5 @@
 {
-  "$id": "https://ersatztv.org/channel/version/0.1.5",
+  "$id": "https://ersatztv.org/channel/version/0.1.6",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ChannelConfig",
   "description": "Settings for one channel: where its playout is, which ffmpeg to use, and the output format.\nA relative path in any of these settings is relative to the file that sets it.",
@@ -194,6 +194,34 @@
           ],
           "format": "uint32",
           "minimum": 0
+        },
+        "tracks": {
+          "description": "Audio tracks to output, in order. The first entry describes the primary track; each\nfurther entry adds a track filled from the playout item's `tracks.extra_audio`, or with\nsilence, so every item has the same layout. Empty outputs one untagged track.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/AudioTrackConfig"
+          }
+        }
+      }
+    },
+    "AudioTrackConfig": {
+      "title": "AudioTrack",
+      "type": "object",
+      "properties": {
+        "language": {
+          "description": "Language tag for the track, e.g. `eng`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "Track title shown in players, e.g. `English`.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },

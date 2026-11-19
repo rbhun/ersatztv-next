@@ -1335,6 +1335,7 @@ pub fn build_input(
         channel_number: None,
         video_copy_seek: None,
         video_copy_blockers: Vec::new(),
+        extra_audio_indices: Vec::new(),
     }
 }
 
@@ -1454,6 +1455,7 @@ pub fn build_output(dir: &Path, params: TestOutputParams) -> OutputSettings {
                 sample_rate: Some(Hz(48000)),
                 loudness: params.loudness,
             },
+            tracks: Vec::new(),
         },
         video: VideoOutputSettings {
             copy: params.video_copy,

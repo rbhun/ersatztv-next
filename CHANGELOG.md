@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 (`0.B.C`, the same rule as the [config versions](https://ersatztv.org/next-docs/configuration/versions)).
 
 ## [Unreleased]
+### Added
+- Add `normalization.audio.tracks` to `channel.json` to output multiple audio tracks (channel config schema `0.1.6`)
+  - Each entry sets a track's `language` and `title`; the first describes the primary track
+  - Fill the extra tracks per item with `tracks.extra_audio` in the playout (playout schema `0.0.9`); unfilled tracks are silent, so every item has the same layout
+
+### Fixed
+- Fix decoding a second audio stream from a source whose primary audio track is downmixed 5.1 AC-3
 
 ## [0.2.7] - 2026-11-20
 ### Fixed

@@ -285,6 +285,7 @@ async fn build_items(
                         stream_index: None,
                     }),
                     subtitle: None,
+                    extra_audio: Vec::new(),
                 });
 
                 playout_item.source = None;
@@ -302,6 +303,7 @@ async fn build_items(
                                 source: None,
                                 stream_index: Some(video_stream.stream_index),
                             }),
+                            extra_audio: Vec::new(),
                         })
                     }
                 }
@@ -336,6 +338,7 @@ async fn build_items(
                                 }),
                                 stream_index: None,
                             }),
+                            extra_audio: Vec::new(),
                         });
                         break;
                     }

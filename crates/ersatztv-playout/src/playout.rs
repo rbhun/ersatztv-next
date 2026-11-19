@@ -14,7 +14,7 @@ pub const DATE_FORMAT: Iso8601<DATE_CONFIG> = Iso8601::<DATE_CONFIG>;
 
 pub const SUPPORTED_SCHEMA: SchemaVersion = SchemaVersion {
     breaking: 0,
-    compatible: 8,
+    compatible: 9,
 };
 pub const SCHEMA: VersionedSchema =
     VersionedSchema::new("https://ersatztv.org/playout/version/", SUPPORTED_SCHEMA);
@@ -103,6 +103,14 @@ pub struct PlayoutItemTracks {
     pub video: Option<TrackSelection>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subtitle: Option<TrackSelection>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_audio: Vec<ExtraAudioTrack>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ExtraAudioTrack {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_index: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -857,7 +865,7 @@ mod tests {
     async fn newer_schema_is_rejected_with_supported_version() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("playout.json");
-        let newer = "https://ersatztv.org/playout/version/0.0.9";
+        let newer = "https://ersatztv.org/playout/version/0.0.10";
         let value = serde_json::json!({ "version": newer, "items": [] });
         tokio::fs::write(&path, serde_json::to_vec(&value).unwrap())
             .await
@@ -869,7 +877,7 @@ mod tests {
                 supported,
             })) => {
                 assert_eq!(found, newer);
-                assert_eq!(supported, "https://ersatztv.org/playout/version/0.0.8");
+                assert_eq!(supported, "https://ersatztv.org/playout/version/0.0.9");
             }
             other => panic!("expected Unsupported, got {:?}", other.err()),
         }

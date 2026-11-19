@@ -22,12 +22,12 @@ use crate::global_option::{GlobalOption, LogLevel};
 use crate::hw_accel::{HardwareAccel, HwAccel};
 use crate::input::{
     CanvasLayout, FfmpegInputArgs, FfmpegInputRequestContext, GraphicsInput, GraphicsKind,
-    InputSettings, InputSource, LocalInputSource, ProbedInput,
+    InputSettings, InputSource, LavfiInputSource, LocalInputSource, ProbedInput,
 };
 use crate::output_format::gop_frames;
 use crate::output_option::OutputOption;
 use crate::output_settings::{
-    OutputSettings, ScalingMode, SubtitleMode, VideoFilterOptions, YadifOptions,
+    AudioTrackMetadata, OutputSettings, ScalingMode, SubtitleMode, VideoFilterOptions, YadifOptions,
 };
 use crate::overlay_filter::{
     FramePoint, OverlayFilter, OverlayKind, OverlaySource, SoftwareOverlay,
@@ -619,6 +619,16 @@ pub struct EnvironmentVariable {
     pub value: String,
 }
 
+/// Where an audio track after the primary comes from.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ExtraAudioSource {
+    /// A stream in the primary audio input.
+    Stream(u32),
+    Silence,
+}
+
+const EXTRA_AUDIO_SILENCE: &str = "anullsrc=channel_layout=stereo:sample_rate=48000";
+
 pub struct Pipeline {
     ffmpeg_info: FfmpegInfo,
     copy_decisions: CopyDecisions,
@@ -631,6 +641,11 @@ pub struct Pipeline {
     filter_chain: FilterChain,
     output_options: Vec<OutputOption>,
     env_vars: Vec<EnvironmentVariable>,
+
+    extra_audio: Vec<ExtraAudioSource>,
+    audio_tracks: Vec<AudioTrackMetadata>,
+    /// Encodes silent extra tracks when the primary audio is copied.
+    silence_codec: AudioCodec,
 
     input_request_context: FfmpegInputRequestContext,
     output_context: OutputContext,
@@ -651,6 +666,22 @@ impl Pipeline {
             );
             input_settings.audio_input = silence;
         }
+
+        let extra_audio: Vec<ExtraAudioSource> = (1..final_output_settings.audio.tracks.len())
+            .map(|track| {
+                input_settings
+                    .extra_audio_indices
+                    .get(track - 1)
+                    .copied()
+                    .flatten()
+                    .filter(|index| {
+                        input_settings.audio_input.probe_result.streams.iter().any(|s| {
+                            matches!(s, ProbeResultStream::Audio(a) if a.stream_index == *index)
+                        })
+                    })
+                    .map_or(ExtraAudioSource::Silence, ExtraAudioSource::Stream)
+            })
+            .collect();
 
         if let Some(accel) = &final_output_settings.accel
             && accel
@@ -1375,6 +1406,12 @@ impl Pipeline {
             input_request_context,
             output_context,
             env_vars,
+            extra_audio,
+            silence_codec: match final_output_settings.audio.transcode.format {
+                AudioFormat::Aac => AudioCodec::Aac,
+                AudioFormat::Ac3 => AudioCodec::Ac3,
+            },
+            audio_tracks: final_output_settings.audio.tracks.clone(),
         })
     }
 
@@ -1408,6 +1445,8 @@ impl Pipeline {
             _ => None,
         }) && Some(audio_channels) == self.output_context.audio_channels.as_ref()
             && !aac_surround
+            // extra tracks can have a different channel count than the primary
+            && self.extra_audio.is_empty()
         {
             self.output_options
                 .retain(|o| !matches!(o, OutputOption::AudioChannels(_)));
@@ -1681,6 +1720,7 @@ impl Pipeline {
         let mut result: ArgVec = Vec::new();
 
         let mut audio_label = String::from("0:a");
+        let mut audio_input_index_for_extras = 0;
         let mut video_label = String::from("0:v");
         let mut subtitle_label = None;
         let mut graphics_labels = vec![
@@ -1818,6 +1858,7 @@ impl Pipeline {
                         }
                     };
                     audio_label = format!("{}:{}", audio_input_index, index);
+                    audio_input_index_for_extras = audio_input_index;
                 }
                 PipelineInput::Subtitle {
                     input_source,
@@ -1873,6 +1914,24 @@ impl Pipeline {
             }
         }
 
+        let mut extra_audio_labels: Vec<String> = Vec::new();
+        for source in &self.extra_audio {
+            match source {
+                ExtraAudioSource::Stream(index) => {
+                    extra_audio_labels.push(format!("{audio_input_index_for_extras}:{index}"));
+                }
+                ExtraAudioSource::Silence => {
+                    let silence = LavfiInputSource {
+                        params: EXTRA_AUDIO_SILENCE.to_owned(),
+                    };
+                    result.extend(silence.args_for_input());
+                    result.extend(args!["-i", EXTRA_AUDIO_SILENCE]);
+                    input_paths.push(EXTRA_AUDIO_SILENCE);
+                    extra_audio_labels.push(format!("{}:a", input_paths.len() - 1));
+                }
+            }
+        }
+
         let mut filter_chain = self.filter_chain.to_owned();
         filter_chain.build(
             &audio_label,
@@ -1883,14 +1942,68 @@ impl Pipeline {
 
         result.extend(filter_chain.as_arg());
 
+        let audio_filters = filter_chain.audio_filter_args();
+        let mut extra_audio_maps: Vec<String> = Vec::new();
+        let mut extra_audio_filters: Vec<String> = Vec::new();
+        for (n, label) in extra_audio_labels.iter().enumerate() {
+            if audio_filters.is_empty() {
+                extra_audio_maps.push(label.to_owned());
+            } else {
+                let out = format!("[a{}]", n + 1);
+                extra_audio_filters.push(format!("[{label}]{}{out}", audio_filters.join(",")));
+                extra_audio_maps.push(out);
+            }
+        }
+        if !extra_audio_filters.is_empty() {
+            result.extend(args!["-filter_complex", extra_audio_filters.join(";")]);
+        }
+
         result.extend(args!["-map", filter_chain.video_label().to_owned()]);
         result.extend(args!["-map", filter_chain.audio_label().to_owned()]);
+        for map in extra_audio_maps {
+            result.extend(args!["-map", map]);
+        }
 
-        result.extend(
-            self.output_options
-                .iter()
-                .flat_map(|o| o.as_arg(&self.output_context)),
-        );
+        let mut audio_track_args = self.audio_track_args();
+        for option in &self.output_options {
+            // per-track options must come before the output path that `-f` ends with
+            if matches!(option, OutputOption::Format(_)) {
+                result.append(&mut audio_track_args);
+            }
+            result.extend(option.as_arg(&self.output_context));
+        }
+        result.append(&mut audio_track_args);
+
+        result
+    }
+
+    fn audio_track_args(&self) -> ArgVec {
+        let mut result: ArgVec = Vec::new();
+
+        // a lavfi stream can't be copied
+        if self.output_context.audio_codec == AudioCodec::Copy {
+            for (n, source) in self.extra_audio.iter().enumerate() {
+                if *source == ExtraAudioSource::Silence {
+                    let codec = self.silence_codec.as_arg().pop().unwrap_or_default();
+                    result.extend(args![format!("-c:a:{}", n + 1), codec]);
+                }
+            }
+        }
+
+        for (n, track) in self.audio_tracks.iter().enumerate() {
+            if let Some(language) = &track.language {
+                result.extend(args![
+                    format!("-metadata:s:a:{n}"),
+                    format!("language={language}")
+                ]);
+            }
+            if let Some(title) = &track.title {
+                result.extend(args![
+                    format!("-metadata:s:a:{n}"),
+                    format!("title={title}")
+                ]);
+            }
+        }
 
         result
     }
@@ -2126,6 +2239,7 @@ mod tests {
             channel_number: None,
             video_copy_seek: None,
             video_copy_blockers: Vec::new(),
+            extra_audio_indices: Vec::new(),
         }
     }
 
@@ -2141,6 +2255,7 @@ mod tests {
                     sample_rate: Some(Hz(48000)),
                     loudness: None,
                 },
+                tracks: Vec::new(),
             },
             video: crate::output_settings::VideoOutputSettings {
                 copy: None,
@@ -3570,5 +3685,105 @@ mod tests {
         ));
         assert!(filter.contains("vpp_qsv="), "{filter}");
         assert!(!filter.contains("scale_qsv"), "{filter}");
+    }
+
+    fn two_audio_input(extra_audio_indices: Vec<Option<u32>>) -> InputSettings {
+        let mut input = multichannel_ac3_input("main.mkv");
+        let second = crate::probe::ProbeResultStream::Audio(crate::probe::ProbeResultAudioStream {
+            stream_index: 2,
+            codec: "aac".to_owned(),
+            channels: 2,
+        });
+        input.audio_input.probe_result.streams.push(second.clone());
+        input.video_input.probe_result.streams.push(second);
+        input.extra_audio_indices = extra_audio_indices;
+        input
+    }
+
+    fn three_track_output() -> OutputSettings {
+        let mut output = stereo_output();
+        output.audio.tracks = ["eng", "spa", "fre"]
+            .into_iter()
+            .map(|language| AudioTrackMetadata {
+                language: Some(language.to_owned()),
+                title: None,
+            })
+            .collect();
+        output
+    }
+
+    fn arg_pairs(args: &[String]) -> Vec<(String, String)> {
+        args.windows(2)
+            .map(|w| (w[0].clone(), w[1].clone()))
+            .collect()
+    }
+
+    #[test]
+    fn extra_audio_maps_source_streams_and_fills_missing_with_silence() {
+        let input = two_audio_input(vec![Some(2), Some(9)]);
+        let mut pipeline =
+            Pipeline::full(&FfmpegInfo::default(), input, three_track_output()).unwrap();
+        pipeline.optimize();
+        let args: Vec<String> = pipeline.args().iter().map(|a| a.to_string()).collect();
+        let pairs = arg_pairs(&args);
+
+        assert!(pairs.contains(&("-i".to_owned(), EXTRA_AUDIO_SILENCE.to_owned())));
+        // extra tracks get the same audio filters as the primary
+        assert!(
+            args.iter()
+                .any(|a| a.contains("[0:2]aresample=async=1,apad[a1]")
+                    && a.contains("[1:a]aresample=async=1,apad[a2]")),
+            "{args:?}"
+        );
+        assert!(
+            pairs.contains(&("-map".to_owned(), "[a1]".to_owned())),
+            "{args:?}"
+        );
+        assert!(
+            pairs.contains(&("-map".to_owned(), "[a2]".to_owned())),
+            "{args:?}"
+        );
+        assert!(
+            pairs.contains(&("-c:1".to_owned(), "ac3".to_owned())),
+            "{args:?}"
+        );
+        for (n, language) in ["eng", "spa", "fre"].iter().enumerate() {
+            assert!(
+                pairs.contains(&(format!("-metadata:s:a:{n}"), format!("language={language}")))
+            );
+        }
+        // every extra track keeps the channel's audio settings
+        assert!(
+            pairs.contains(&("-ac".to_owned(), "2".to_owned())),
+            "{args:?}"
+        );
+    }
+
+    #[test]
+    fn audio_track_options_precede_output_path() {
+        let input = two_audio_input(vec![Some(2)]);
+        let mut pipeline =
+            Pipeline::full(&FfmpegInfo::default(), input, three_track_output()).unwrap();
+        pipeline.optimize();
+        let args: Vec<String> = pipeline.args().iter().map(|a| a.to_string()).collect();
+
+        let format = args.iter().rposition(|a| a == "-f").unwrap();
+        let last_metadata = args
+            .iter()
+            .rposition(|a| a.starts_with("-metadata:s:a:"))
+            .unwrap();
+        assert!(last_metadata < format, "{args:?}");
+    }
+
+    #[test]
+    fn no_tracks_outputs_single_untagged_audio() {
+        let input = two_audio_input(vec![Some(2)]);
+        let mut pipeline = Pipeline::full(&FfmpegInfo::default(), input, stereo_output()).unwrap();
+        pipeline.optimize();
+        let args: Vec<String> = pipeline.args().iter().map(|a| a.to_string()).collect();
+
+        assert!(!args.iter().any(|a| a.starts_with("-metadata:s:a:")));
+        assert!(!args.contains(&EXTRA_AUDIO_SILENCE.to_owned()));
+        assert!(!args.contains(&"0:2".to_owned()));
     }
 }

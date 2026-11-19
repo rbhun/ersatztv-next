@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ersatztv.org/playout/version/0.0.8",
+  "$id": "https://ersatztv.org/playout/version/0.0.9",
   "title": "Playout",
   "description": "A playout schedule for a single time window.\n\nFiles should be named `{start}_{finish}.json` using compact ISO 8601 (no separators), e.g. `20260413T000000.000000000-0500_20260414T002131.620000000-0500.json`, so that the channel can locate the correct file for the current time.",
   "type": "object",
@@ -124,6 +124,28 @@
               "type": "null"
             }
           ]
+        },
+        "extra_audio": {
+          "description": "Audio tracks to output after the primary `audio` track, filling the channel's `normalization.audio.tracks` slots in order. Each is read from the same source as the primary audio track. Slots without an entry here are filled with silence, so every item has the same track layout.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ExtraAudioTrack"
+          }
+        }
+      }
+    },
+    "ExtraAudioTrack": {
+      "type": "object",
+      "description": "Fills one extra audio slot.",
+      "properties": {
+        "stream_index": {
+          "description": "Audio stream within the primary audio track's source. Omit it, or name a stream the source doesn't have, to fill the slot with silence.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
         }
       }
     },

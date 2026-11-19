@@ -897,6 +897,17 @@ impl FilterChain {
         &self.audio_label
     }
 
+    /// The primary audio filter steps, so extra audio tracks get the same processing.
+    pub(crate) fn audio_filter_args(&self) -> Vec<String> {
+        self.filters
+            .iter()
+            .filter_map(|f| match f {
+                PipelineFilter::Audio(audio_filter) => audio_filter.as_arg(),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub(crate) fn video_label(&self) -> &str {
         &self.video_label
     }

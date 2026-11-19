@@ -14,7 +14,7 @@ use crate::error::{ChannelError, IoContext};
 
 pub const SUPPORTED_SCHEMA: SchemaVersion = SchemaVersion {
     breaking: 1,
-    compatible: 5,
+    compatible: 6,
 };
 pub const SCHEMA: VersionedSchema =
     VersionedSchema::new("https://ersatztv.org/channel/version/", SUPPORTED_SCHEMA);
@@ -234,6 +234,20 @@ pub struct AudioNormalizationConfig {
     pub normalize_loudness: bool,
     /// Targets for `normalize_loudness`.
     pub loudness: Option<AudioLoudnessConfig>,
+    /// Audio tracks to output, in order. The first entry describes the primary track; each
+    /// further entry adds a track filled from the playout item's `tracks.extra_audio`, or with
+    /// silence, so every item has the same layout. Empty outputs one untagged track.
+    #[serde(default)]
+    pub tracks: Vec<AudioTrackConfig>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, Default)]
+#[schemars(title = "AudioTrack")]
+pub struct AudioTrackConfig {
+    /// Language tag for the track, e.g. `eng`.
+    pub language: Option<String>,
+    /// Track title shown in players, e.g. `English`.
+    pub title: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, Default)]

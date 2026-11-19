@@ -31,8 +31,8 @@ use ffpipeline::keyframe_seek::{
     CopySeekRequest, InputStart, Keyframe, KeyframeLocator, plan_copy_seek,
 };
 use ffpipeline::output_settings::{
-    AudioOutputSettings, AudioTranscodeSettings, CopyPolicy, OutputSettings, SubtitleMode,
-    VideoOutputSettings, VideoTranscodeSettings,
+    AudioOutputSettings, AudioTrackMetadata, AudioTranscodeSettings, CopyPolicy, OutputSettings,
+    SubtitleMode, VideoOutputSettings, VideoTranscodeSettings,
 };
 use ffpipeline::pipeline::{Hz, Kbps, PtsOffset, SEGMENT_SECONDS};
 use ffpipeline::probe::{
@@ -736,6 +736,12 @@ impl ChannelSession {
             .and_then(|t| t.audio.as_ref())
             .and_then(|a| a.stream_index);
 
+        let extra_audio_indices = current_item
+            .tracks
+            .as_ref()
+            .map(|t| t.extra_audio.iter().map(|a| a.stream_index).collect())
+            .unwrap_or_default();
+
         let subtitle_index = current_item
             .tracks
             .as_ref()
@@ -791,6 +797,7 @@ impl ChannelSession {
             channel_number: Some(self.channel_config.number().to_owned()),
             video_copy_seek: None,
             video_copy_blockers: Vec::new(),
+            extra_audio_indices,
         };
 
         let window = input_settings.duration();
@@ -1896,6 +1903,7 @@ fn fallback_item(
                 stream_index: None,
             }),
             subtitle,
+            extra_audio: Vec::new(),
         }),
         watermark: None,
         graphics: Vec::new(),
@@ -1972,6 +1980,14 @@ fn stream_output_settings(
                 None
             },
         },
+        tracks: audio_norm
+            .tracks
+            .iter()
+            .map(|t| AudioTrackMetadata {
+                language: t.language.clone(),
+                title: t.title.clone(),
+            })
+            .collect(),
     };
 
     let video = VideoOutputSettings {
@@ -2317,6 +2333,7 @@ mod tests {
             channel_number: None,
             video_copy_seek: None,
             video_copy_blockers: Vec::new(),
+            extra_audio_indices: Vec::new(),
         };
         let output = OutputSettings {
             audio,
