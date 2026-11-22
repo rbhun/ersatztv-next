@@ -14,7 +14,7 @@ use crate::error::{ChannelError, IoContext};
 
 pub const SUPPORTED_SCHEMA: SchemaVersion = SchemaVersion {
     breaking: 1,
-    compatible: 6,
+    compatible: 7,
 };
 pub const SCHEMA: VersionedSchema =
     VersionedSchema::new("https://ersatztv.org/channel/version/", SUPPORTED_SCHEMA);
@@ -840,9 +840,16 @@ impl From<VideoFormat> for ffpipeline::pipeline::EncodeFormat {
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, Default)]
 pub struct SubtitleNormalizationConfig {
-    /// What to do with the selected text subtitle track. Image subtitles are always burned in.
+    /// What to do with the selected subtitle track. Image subtitles are always burned in, except
+    /// with `mux`.
     #[serde(default)]
     pub mode: SubtitleMode,
+    /// Subtitle tracks to mux into the MPEG-TS stream with `mode` `mux`, in order. The first
+    /// entry describes the primary track, from the playout item's `tracks.subtitle`; each further
+    /// entry is filled from `tracks.extra_subtitle`, falling back to the primary stream. Empty
+    /// muxes nothing and burns subtitles as usual.
+    #[serde(default)]
+    pub tracks: Vec<SubtitleTrackConfig>,
     /// Folder of fonts for burned-in text subtitles.
     #[serde(default)]
     pub fonts_folder: Option<String>,
@@ -850,6 +857,15 @@ pub struct SubtitleNormalizationConfig {
     /// (the `subtitles` filter's `force_style` option).
     #[serde(default)]
     pub force_style: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, Default)]
+#[schemars(title = "SubtitleTrack")]
+pub struct SubtitleTrackConfig {
+    /// Language tag for the track, e.g. `eng`.
+    pub language: Option<String>,
+    /// Track title shown in players, e.g. `English`.
+    pub title: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, Default, Copy)]
@@ -861,6 +877,9 @@ pub enum SubtitleMode {
     Burn,
     /// Convert text subtitles to a WebVTT track in the HLS stream.
     Convert,
+    /// Mux subtitle tracks into the MPEG-TS stream as DVD subtitles instead of burning them in.
+    /// Needs `normalization.subtitle.tracks`.
+    Mux,
 }
 
 impl From<SubtitleMode> for ffpipeline::output_settings::SubtitleMode {
@@ -868,6 +887,7 @@ impl From<SubtitleMode> for ffpipeline::output_settings::SubtitleMode {
         match value {
             SubtitleMode::Burn => ffpipeline::output_settings::SubtitleMode::Burn,
             SubtitleMode::Convert => ffpipeline::output_settings::SubtitleMode::Convert,
+            SubtitleMode::Mux => ffpipeline::output_settings::SubtitleMode::Mux,
         }
     }
 }

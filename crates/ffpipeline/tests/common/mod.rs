@@ -1336,6 +1336,7 @@ pub fn build_input(
         video_copy_seek: None,
         video_copy_blockers: Vec::new(),
         extra_audio_indices: Vec::new(),
+        extra_subtitle_indices: Vec::new(),
     }
 }
 
@@ -1481,6 +1482,7 @@ pub fn build_output(dir: &Path, params: TestOutputParams) -> OutputSettings {
         is_live: false,
         frame_rate: params.frame_rate,
         subtitle_mode: SubtitleMode::Burn,
+        subtitle_tracks: Vec::new(),
         fonts_folder: params.fonts_folder,
         subtitle_force_style: params.subtitle_force_style,
         reports_folder: None,

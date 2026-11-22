@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ersatztv.org/playout/version/0.0.9",
+  "$id": "https://ersatztv.org/playout/version/0.0.10",
   "title": "Playout",
   "description": "A playout schedule for a single time window.\n\nFiles should be named `{start}_{finish}.json` using compact ISO 8601 (no separators), e.g. `20260413T000000.000000000-0500_20260414T002131.620000000-0500.json`, so that the channel can locate the correct file for the current time.",
   "type": "object",
@@ -131,6 +131,28 @@
           "items": {
             "$ref": "#/definitions/ExtraAudioTrack"
           }
+        },
+        "extra_subtitle": {
+          "description": "Subtitle tracks to output after the primary `subtitle` track, filling the channel's `normalization.subtitle.tracks` slots in order when `normalization.subtitle.mode` is `mux`. Each is read from the same source as the primary subtitle track. Slots without an entry here, or whose stream the source doesn't have, reuse the primary subtitle stream.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ExtraSubtitleTrack"
+          }
+        }
+      }
+    },
+    "ExtraSubtitleTrack": {
+      "type": "object",
+      "description": "Fills one extra subtitle slot.",
+      "properties": {
+        "stream_index": {
+          "description": "Subtitle stream within the primary subtitle track's source. Omit it, or name a stream the source doesn't have, to reuse the primary subtitle stream.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
         }
       }
     },

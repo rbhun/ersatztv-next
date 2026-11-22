@@ -1,5 +1,5 @@
 {
-  "$id": "https://ersatztv.org/channel/version/0.1.6",
+  "$id": "https://ersatztv.org/channel/version/0.1.7",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ChannelConfig",
   "description": "Settings for one channel: where its playout is, which ffmpeg to use, and the output format.\nA relative path in any of these settings is relative to the file that sets it.",
@@ -445,7 +445,8 @@
           "default": {
             "fonts_folder": null,
             "force_style": null,
-            "mode": "burn"
+            "mode": "burn",
+            "tracks": []
           }
         },
         "video": {
@@ -563,6 +564,11 @@
           "description": "Convert text subtitles to a WebVTT track in the HLS stream.",
           "type": "string",
           "const": "convert"
+        },
+        {
+          "description": "Mux subtitle tracks into the MPEG-TS stream as DVD subtitles instead of burning them in.\nNeeds `normalization.subtitle.tracks`.",
+          "type": "string",
+          "const": "mux"
         }
       ]
     },
@@ -586,9 +592,37 @@
           "default": null
         },
         "mode": {
-          "description": "What to do with the selected text subtitle track. Image subtitles are always burned in.",
+          "description": "What to do with the selected subtitle track. Image subtitles are always burned in, except\nwith `mux`.",
           "$ref": "#/$defs/SubtitleMode",
           "default": "burn"
+        },
+        "tracks": {
+          "description": "Subtitle tracks to mux into the MPEG-TS stream with `mode` `mux`, in order. The first\nentry describes the primary track, from the playout item's `tracks.subtitle`; each further\nentry is filled from `tracks.extra_subtitle`, falling back to the primary stream. Empty\nmuxes nothing and burns subtitles as usual.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SubtitleTrackConfig"
+          }
+        }
+      }
+    },
+    "SubtitleTrackConfig": {
+      "title": "SubtitleTrack",
+      "type": "object",
+      "properties": {
+        "language": {
+          "description": "Language tag for the track, e.g. `eng`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "Track title shown in players, e.g. `English`.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },

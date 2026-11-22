@@ -214,6 +214,6 @@ mod tests {
             "videotoolbox",
             "vulkan",
         ]);
-        assert_round_trips::<SubtitleMode>(&["burn", "convert"]);
+        assert_round_trips::<SubtitleMode>(&["burn", "convert", "mux"]);
     }
 }

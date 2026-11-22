@@ -1,6 +1,6 @@
 {
   "$schema": "../../schema/playout.json",
-  "version": "https://ersatztv.org/playout/version/0.0.9",
+  "version": "https://ersatztv.org/playout/version/0.0.10",
   "items": [
     {
       "id": "1",

@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Add `normalization.audio.tracks` to `channel.json` to output multiple audio tracks (channel config schema `0.1.6`)
   - Each entry sets a track's `language` and `title`; the first describes the primary track
   - Fill the extra tracks per item with `tracks.extra_audio` in the playout (playout schema `0.0.9`); unfilled tracks are silent, so every item has the same layout
+- Add `mux` subtitle mode and `normalization.subtitle.tracks` to `channel.json` to mux multiple subtitle tracks into the MPEG-TS stream instead of burning subtitles in (channel config schema `0.1.7`)
+  - Each entry sets a track's `language` and `title`; the first describes the primary track
+  - Fill the extra tracks per item with `tracks.extra_subtitle` in the playout (playout schema `0.0.10`); unfilled tracks reuse the primary subtitle stream
+  - Subtitles are encoded as DVD subtitles, so text subtitle sources can't be muxed; DVD and DVB subtitles are copied
 
 ### Fixed
 - Fix decoding a second audio stream from a source whose primary audio track is downmixed 5.1 AC-3

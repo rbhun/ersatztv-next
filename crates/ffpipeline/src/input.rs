@@ -31,6 +31,9 @@ pub struct InputSettings {
     /// Source stream for each audio track after the primary, read from `audio_input`.
     /// `None`, or an index the source doesn't have, fills that track with silence.
     pub extra_audio_indices: Vec<Option<u32>>,
+    /// Source stream for each subtitle track after the primary, read from `subtitle_input`.
+    /// `None`, or an index the source doesn't have, reuses the primary subtitle stream.
+    pub extra_subtitle_indices: Vec<Option<u32>>,
 }
 
 impl InputSettings {

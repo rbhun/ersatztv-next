@@ -18,6 +18,8 @@ pub struct OutputSettings {
     pub is_live: bool,
     pub frame_rate: Option<FrameRate>,
     pub subtitle_mode: SubtitleMode,
+    /// Output subtitle tracks for `SubtitleMode::Mux`, in order. Empty muxes none.
+    pub subtitle_tracks: Vec<SubtitleTrackMetadata>,
     pub fonts_folder: Option<String>,
     pub subtitle_force_style: Option<String>,
     pub reports_folder: Option<String>,
@@ -198,10 +200,19 @@ impl Default for AudioLoudnessSettings {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct SubtitleTrackMetadata {
+    /// ISO 639-2 language code written to the stream, e.g. `eng`.
+    pub language: Option<String>,
+    pub title: Option<String>,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum SubtitleMode {
     Burn,
     Convert,
+    /// Mux subtitle tracks into the output without burning anything into the video.
+    Mux,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]

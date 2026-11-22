@@ -27,7 +27,8 @@ use crate::input::{
 use crate::output_format::gop_frames;
 use crate::output_option::OutputOption;
 use crate::output_settings::{
-    AudioTrackMetadata, OutputSettings, ScalingMode, SubtitleMode, VideoFilterOptions, YadifOptions,
+    AudioTrackMetadata, OutputSettings, ScalingMode, SubtitleMode, SubtitleTrackMetadata,
+    VideoFilterOptions, YadifOptions,
 };
 use crate::overlay_filter::{
     FramePoint, OverlayFilter, OverlayKind, OverlaySource, SoftwareOverlay,
@@ -627,6 +628,24 @@ pub(crate) enum ExtraAudioSource {
     Silence,
 }
 
+/// Subtitle streams muxed into the output when `SubtitleMode::Mux` is set.
+#[derive(Debug, Clone)]
+struct MuxSubtitles {
+    input_source: InputSource,
+    path: String,
+    seek: Duration,
+    streams: Vec<MuxSubtitleStream>,
+}
+
+#[derive(Debug, Clone)]
+struct MuxSubtitleStream {
+    index: u32,
+    /// The source is already a codec MPEG-TS carries, so it can be copied.
+    copy: bool,
+}
+
+const MPEGTS_SUBTITLE_CODECS: &[&str] = &["dvd_subtitle", "dvdsub", "dvb_subtitle", "dvbsub"];
+
 const EXTRA_AUDIO_SILENCE: &str = "anullsrc=channel_layout=stereo:sample_rate=48000";
 
 pub struct Pipeline {
@@ -644,6 +663,8 @@ pub struct Pipeline {
 
     extra_audio: Vec<ExtraAudioSource>,
     audio_tracks: Vec<AudioTrackMetadata>,
+    mux_subtitles: Option<MuxSubtitles>,
+    subtitle_tracks: Vec<SubtitleTrackMetadata>,
     /// Encodes silent extra tracks when the primary audio is copied.
     silence_codec: AudioCodec,
 
@@ -682,6 +703,8 @@ impl Pipeline {
                     .map_or(ExtraAudioSource::Silence, ExtraAudioSource::Stream)
             })
             .collect();
+
+        let mux_subtitles = mux_subtitles(&input_settings, &final_output_settings);
 
         if let Some(accel) = &final_output_settings.accel
             && accel
@@ -1412,6 +1435,12 @@ impl Pipeline {
                 AudioFormat::Ac3 => AudioCodec::Ac3,
             },
             audio_tracks: final_output_settings.audio.tracks.clone(),
+            subtitle_tracks: if mux_subtitles.is_some() {
+                final_output_settings.subtitle_tracks.clone()
+            } else {
+                Vec::new()
+            },
+            mux_subtitles,
         })
     }
 
@@ -1932,6 +1961,30 @@ impl Pipeline {
             }
         }
 
+        let mut subtitle_maps: Vec<String> = Vec::new();
+        if let Some(mux) = &self.mux_subtitles {
+            let input_index = match input_paths.iter().position(|p| *p == mux.path.as_str()) {
+                Some(shared_index) => shared_index,
+                None => {
+                    input_paths.push(mux.path.as_str());
+
+                    if !mux.seek.is_zero() {
+                        result.extend(args!["-ss", format!("{}ms", mux.seek.as_millis())]);
+                    }
+
+                    result.extend(mux.input_source.args_for_input());
+                    result.extend(args!["-i", mux.path.to_owned()]);
+
+                    input_paths.len() - 1
+                }
+            };
+            subtitle_maps = mux
+                .streams
+                .iter()
+                .map(|s| format!("{input_index}:{}", s.index))
+                .collect();
+        }
+
         let mut filter_chain = self.filter_chain.to_owned();
         filter_chain.build(
             &audio_label,
@@ -1963,8 +2016,12 @@ impl Pipeline {
         for map in extra_audio_maps {
             result.extend(args!["-map", map]);
         }
+        for map in subtitle_maps {
+            result.extend(args!["-map", map]);
+        }
 
         let mut audio_track_args = self.audio_track_args();
+        audio_track_args.extend(self.subtitle_track_args());
         for option in &self.output_options {
             // per-track options must come before the output path that `-f` ends with
             if matches!(option, OutputOption::Format(_)) {
@@ -1973,6 +2030,34 @@ impl Pipeline {
             result.extend(option.as_arg(&self.output_context));
         }
         result.append(&mut audio_track_args);
+
+        result
+    }
+
+    fn subtitle_track_args(&self) -> ArgVec {
+        let mut result: ArgVec = Vec::new();
+
+        if let Some(mux) = &self.mux_subtitles {
+            for (n, stream) in mux.streams.iter().enumerate() {
+                let codec = if stream.copy { "copy" } else { "dvdsub" };
+                result.extend(args![format!("-c:s:{n}"), codec]);
+            }
+        }
+
+        for (n, track) in self.subtitle_tracks.iter().enumerate() {
+            if let Some(language) = &track.language {
+                result.extend(args![
+                    format!("-metadata:s:s:{n}"),
+                    format!("language={language}")
+                ]);
+            }
+            if let Some(title) = &track.title {
+                result.extend(args![
+                    format!("-metadata:s:s:{n}"),
+                    format!("title={title}")
+                ]);
+            }
+        }
 
         result
     }
@@ -2036,11 +2121,64 @@ fn unknown_pgs_canvas_size(stream: &ProbeResultVideoStream) -> Option<FrameSize>
     )
 }
 
+/// One stream per output subtitle track. The primary track is the item's selected subtitle;
+/// each further track reads its `extra_subtitle_indices` entry, or reuses the primary.
+fn mux_subtitles(
+    input_settings: &InputSettings,
+    output_settings: &OutputSettings,
+) -> Option<MuxSubtitles> {
+    if output_settings.subtitle_mode != SubtitleMode::Mux
+        || output_settings.subtitle_tracks.is_empty()
+    {
+        return None;
+    }
+
+    let input = input_settings.subtitle_input.as_ref()?;
+    let primary = input_settings.select_subtitle_stream()?;
+    let subtitle_stream = |index: u32| {
+        input.probe_result.streams.iter().find_map(|s| match s {
+            ProbeResultStream::Video(v)
+                if v.codec_type == CodecType::Subtitle && v.stream_index == index =>
+            {
+                Some(&**v)
+            }
+            _ => None,
+        })
+    };
+
+    let streams = (0..output_settings.subtitle_tracks.len())
+        .map(|track| {
+            let stream = track
+                .checked_sub(1)
+                .and_then(|extra| input_settings.extra_subtitle_indices.get(extra))
+                .copied()
+                .flatten()
+                .and_then(subtitle_stream)
+                .unwrap_or(primary);
+            MuxSubtitleStream {
+                index: stream.stream_index,
+                copy: MPEGTS_SUBTITLE_CODECS.contains(&stream.codec.as_str()),
+            }
+        })
+        .collect();
+
+    Some(MuxSubtitles {
+        input_source: input.input_source.clone(),
+        path: input.probe_result.path.clone(),
+        seek: input.in_point,
+        streams,
+    })
+}
+
 fn subtitle_burn<'a>(
     input_settings: &'a InputSettings,
     output_settings: &OutputSettings,
     video_stream: &ProbeResultVideoStream,
 ) -> Option<SubtitleBurn<'a>> {
+    if output_settings.subtitle_mode == SubtitleMode::Mux {
+        return None;
+    }
+
     match (
         input_settings.select_subtitle_stream(),
         input_settings.subtitle_input.as_ref(),
@@ -2240,6 +2378,7 @@ mod tests {
             video_copy_seek: None,
             video_copy_blockers: Vec::new(),
             extra_audio_indices: Vec::new(),
+            extra_subtitle_indices: Vec::new(),
         }
     }
 
@@ -2284,6 +2423,7 @@ mod tests {
             is_live: false,
             frame_rate: None,
             subtitle_mode: SubtitleMode::Burn,
+            subtitle_tracks: Vec::new(),
             fonts_folder: None,
             subtitle_force_style: None,
             reports_folder: None,
@@ -3785,5 +3925,122 @@ mod tests {
         assert!(!args.iter().any(|a| a.starts_with("-metadata:s:a:")));
         assert!(!args.contains(&EXTRA_AUDIO_SILENCE.to_owned()));
         assert!(!args.contains(&"0:2".to_owned()));
+    }
+
+    fn mux_subtitle_input(extra_subtitle_indices: Vec<Option<u32>>) -> InputSettings {
+        let mut input = multichannel_ac3_input("main.mkv");
+        let mut subtitle = image_subtitle_input("subs.mkv", "hdmv_pgs_subtitle", None);
+        subtitle.stream_index = Some(7);
+        let mut dvb = subtitle.probe_result.streams[0].clone();
+        if let crate::probe::ProbeResultStream::Video(video) = &mut dvb {
+            video.stream_index = 8;
+            video.codec = "dvb_subtitle".to_owned();
+        }
+        subtitle.probe_result.streams.push(dvb);
+        input.subtitle_input = Some(subtitle);
+        input.extra_subtitle_indices = extra_subtitle_indices;
+        input
+    }
+
+    fn mux_output(languages: &[&str]) -> OutputSettings {
+        let mut output = stereo_output();
+        output.subtitle_mode = SubtitleMode::Mux;
+        output.subtitle_tracks = languages
+            .iter()
+            .map(|language| SubtitleTrackMetadata {
+                language: Some((*language).to_owned()),
+                title: Some(language.to_uppercase()),
+            })
+            .collect();
+        output
+    }
+
+    fn mux_args(input: InputSettings, output: OutputSettings) -> Vec<String> {
+        let mut pipeline = Pipeline::full(&FfmpegInfo::default(), input, output).unwrap();
+        pipeline.optimize();
+        pipeline.args().iter().map(|a| a.to_string()).collect()
+    }
+
+    #[test]
+    fn mux_maps_subtitle_streams_without_burning() {
+        let args = mux_args(
+            mux_subtitle_input(vec![Some(8), Some(99)]),
+            mux_output(&["eng", "spa", "fre"]),
+        );
+        let pairs = arg_pairs(&args);
+
+        // the subtitle file is its own input, after the video input
+        assert!(pairs.contains(&("-i".to_owned(), "subs.mkv".to_owned())));
+        for map in ["1:7", "1:8"] {
+            assert!(
+                pairs.contains(&("-map".to_owned(), map.to_owned())),
+                "{args:?}"
+            );
+        }
+        // an index the source doesn't have reuses the primary stream
+        assert_eq!(
+            pairs
+                .iter()
+                .filter(|(a, b)| a == "-map" && b == "1:7")
+                .count(),
+            2,
+            "{args:?}"
+        );
+        // PGS is encoded; DVB is copied
+        assert!(pairs.contains(&("-c:s:0".to_owned(), "dvdsub".to_owned())));
+        assert!(pairs.contains(&("-c:s:1".to_owned(), "copy".to_owned())));
+        assert!(pairs.contains(&("-c:s:2".to_owned(), "dvdsub".to_owned())));
+        for (n, language) in ["eng", "spa", "fre"].iter().enumerate() {
+            assert!(
+                pairs.contains(&(format!("-metadata:s:s:{n}"), format!("language={language}")))
+            );
+            assert!(pairs.contains(&(
+                format!("-metadata:s:s:{n}"),
+                format!("title={}", language.to_uppercase())
+            )));
+        }
+        // nothing is burned into the video
+        assert!(
+            !args
+                .iter()
+                .any(|a| a.contains("overlay") || a.contains("subtitles=")),
+            "{args:?}"
+        );
+        let format = args.iter().rposition(|a| a == "-f").unwrap();
+        let last_metadata = args
+            .iter()
+            .rposition(|a| a.starts_with("-metadata:s:s:"))
+            .unwrap();
+        assert!(last_metadata < format, "{args:?}");
+    }
+
+    #[test]
+    fn mux_maps_subtitles_after_audio() {
+        let mut input = mux_subtitle_input(Vec::new());
+        input.extra_audio_indices = vec![None];
+        let mut output = mux_output(&["eng"]);
+        output.audio.tracks = vec![AudioTrackMetadata::default(); 2];
+        let args = mux_args(input, output);
+
+        let maps: Vec<&String> = args
+            .windows(2)
+            .filter(|w| w[0] == "-map")
+            .map(|w| &w[1])
+            .collect();
+        assert_eq!(maps.last().map(|m| m.as_str()), Some("2:7"), "{args:?}");
+        assert_eq!(maps.len(), 4, "{args:?}");
+    }
+
+    #[test]
+    fn burn_mode_does_not_mux_subtitles() {
+        let mut output = mux_output(&["eng"]);
+        output.subtitle_mode = SubtitleMode::Burn;
+        let args = mux_args(mux_subtitle_input(Vec::new()), output);
+
+        assert!(!args.iter().any(|a| a.starts_with("-c:s:")), "{args:?}");
+        assert!(
+            !args.iter().any(|a| a.starts_with("-metadata:s:s:")),
+            "{args:?}"
+        );
     }
 }

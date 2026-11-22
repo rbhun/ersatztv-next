@@ -32,7 +32,7 @@ use ffpipeline::keyframe_seek::{
 };
 use ffpipeline::output_settings::{
     AudioOutputSettings, AudioTrackMetadata, AudioTranscodeSettings, CopyPolicy, OutputSettings,
-    SubtitleMode, VideoOutputSettings, VideoTranscodeSettings,
+    SubtitleMode, SubtitleTrackMetadata, VideoOutputSettings, VideoTranscodeSettings,
 };
 use ffpipeline::pipeline::{Hz, Kbps, PtsOffset, SEGMENT_SECONDS};
 use ffpipeline::probe::{
@@ -566,11 +566,32 @@ impl ChannelSession {
         pts_duration: Option<Duration>,
         is_fallback: bool,
     ) -> Result<(OffsetDateTime, bool), ChannelError> {
+        let subtitle_tracks: Vec<SubtitleTrackMetadata> = self
+            .channel_config
+            .normalization
+            .subtitle
+            .tracks
+            .iter()
+            .map(|t| SubtitleTrackMetadata {
+                language: t.language.clone(),
+                title: t.title.clone(),
+            })
+            .collect();
         let subtitle_mode = if is_fallback {
             // the fallback message is only useful on screen
             SubtitleMode::Burn
         } else {
-            self.channel_config.normalization.subtitle.mode.into()
+            let mode: SubtitleMode = self.channel_config.normalization.subtitle.mode.into();
+            if mode == SubtitleMode::Mux && subtitle_tracks.is_empty() {
+                SubtitleMode::Burn
+            } else {
+                mode
+            }
+        };
+        let subtitle_tracks = if subtitle_mode == SubtitleMode::Mux {
+            subtitle_tracks
+        } else {
+            Vec::new()
         };
 
         // prioritize source from audio tracks, then default source
@@ -685,6 +706,7 @@ impl ChannelSession {
             frame_rate: target_frame_rate(&self.channel_config.normalization)
                 .or_else(|| video_probe_result.is_still_image().then(FrameRate::default)),
             subtitle_mode,
+            subtitle_tracks,
             fonts_folder: self
                 .channel_config
                 .normalization
@@ -740,6 +762,12 @@ impl ChannelSession {
             .tracks
             .as_ref()
             .map(|t| t.extra_audio.iter().map(|a| a.stream_index).collect())
+            .unwrap_or_default();
+
+        let extra_subtitle_indices = current_item
+            .tracks
+            .as_ref()
+            .map(|t| t.extra_subtitle.iter().map(|s| s.stream_index).collect())
             .unwrap_or_default();
 
         let subtitle_index = current_item
@@ -798,6 +826,7 @@ impl ChannelSession {
             video_copy_seek: None,
             video_copy_blockers: Vec::new(),
             extra_audio_indices,
+            extra_subtitle_indices,
         };
 
         let window = input_settings.duration();
@@ -1904,6 +1933,7 @@ fn fallback_item(
             }),
             subtitle,
             extra_audio: Vec::new(),
+            extra_subtitle: Vec::new(),
         }),
         watermark: None,
         graphics: Vec::new(),
@@ -2334,6 +2364,7 @@ mod tests {
             video_copy_seek: None,
             video_copy_blockers: Vec::new(),
             extra_audio_indices: Vec::new(),
+            extra_subtitle_indices: Vec::new(),
         };
         let output = OutputSettings {
             audio,
@@ -2349,6 +2380,7 @@ mod tests {
             is_live: false,
             frame_rate: None,
             subtitle_mode: SubtitleMode::Burn,
+            subtitle_tracks: Vec::new(),
             fonts_folder: None,
             subtitle_force_style: None,
             reports_folder: None,
