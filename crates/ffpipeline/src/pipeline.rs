@@ -644,7 +644,8 @@ struct MuxSubtitleStream {
     copy: bool,
 }
 
-const MPEGTS_SUBTITLE_CODECS: &[&str] = &["dvd_subtitle", "dvdsub", "dvb_subtitle", "dvbsub"];
+/// Codecs that can be copied into MPEG-TS. DVD/PGS must be re-encoded to DVB.
+const MPEGTS_COPY_SUBTITLE_CODECS: &[&str] = &["dvb_subtitle", "dvbsub"];
 
 const EXTRA_AUDIO_SILENCE: &str = "anullsrc=channel_layout=stereo:sample_rate=48000";
 
@@ -705,6 +706,14 @@ impl Pipeline {
             .collect();
 
         let mux_subtitles = mux_subtitles(&input_settings, &final_output_settings);
+        // Mux needs image (PGS/DVD/DVB) streams inside MPEG-TS; text cannot be
+        // encoded to dvbsub. Fall back to burn so the item still plays.
+        if mux_subtitles.is_none() && final_output_settings.subtitle_mode == SubtitleMode::Mux {
+            log::warn!(
+                "subtitle mux requested but no image subtitle streams are available; burning instead"
+            );
+            final_output_settings.subtitle_mode = SubtitleMode::Burn;
+        }
 
         if let Some(accel) = &final_output_settings.accel
             && accel
@@ -2039,7 +2048,7 @@ impl Pipeline {
 
         if let Some(mux) = &self.mux_subtitles {
             for (n, stream) in mux.streams.iter().enumerate() {
-                let codec = if stream.copy { "copy" } else { "dvdsub" };
+                let codec = if stream.copy { "copy" } else { "dvbsub" };
                 result.extend(args![format!("-c:s:{n}"), codec]);
             }
         }
@@ -2123,6 +2132,7 @@ fn unknown_pgs_canvas_size(stream: &ProbeResultVideoStream) -> Option<FrameSize>
 
 /// One stream per output subtitle track. The primary track is the item's selected subtitle;
 /// each further track reads its `extra_subtitle_indices` entry, or reuses the primary.
+/// Only image subtitles (PGS/DVD/DVB) are muxed; text sources return `None`.
 fn mux_subtitles(
     input_settings: &InputSettings,
     output_settings: &OutputSettings,
@@ -2135,10 +2145,16 @@ fn mux_subtitles(
 
     let input = input_settings.subtitle_input.as_ref()?;
     let primary = input_settings.select_subtitle_stream()?;
+    if !primary.is_subtitle_image() {
+        return None;
+    }
+
     let subtitle_stream = |index: u32| {
         input.probe_result.streams.iter().find_map(|s| match s {
             ProbeResultStream::Video(v)
-                if v.codec_type == CodecType::Subtitle && v.stream_index == index =>
+                if v.codec_type == CodecType::Subtitle
+                    && v.stream_index == index
+                    && v.is_subtitle_image() =>
             {
                 Some(&**v)
             }
@@ -2157,7 +2173,7 @@ fn mux_subtitles(
                 .unwrap_or(primary);
             MuxSubtitleStream {
                 index: stream.stream_index,
-                copy: MPEGTS_SUBTITLE_CODECS.contains(&stream.codec.as_str()),
+                copy: MPEGTS_COPY_SUBTITLE_CODECS.contains(&stream.codec.as_str()),
             }
         })
         .collect();
@@ -2417,6 +2433,7 @@ mod tests {
                 playlist: "out.m3u8".to_owned(),
                 segment_template: "live%06d.ts".to_owned(),
                 troubleshoot: false,
+                in_band_subtitles: false,
             },
             pts_offset: None,
             realtime: false,
@@ -3952,6 +3969,10 @@ mod tests {
                 title: Some(language.to_uppercase()),
             })
             .collect();
+        let crate::output_format::OutputFormat::Hls {
+            in_band_subtitles, ..
+        } = &mut output.format;
+        *in_band_subtitles = true;
         output
     }
 
@@ -3986,10 +4007,10 @@ mod tests {
             2,
             "{args:?}"
         );
-        // PGS is encoded; DVB is copied
-        assert!(pairs.contains(&("-c:s:0".to_owned(), "dvdsub".to_owned())));
+        // PGS is encoded to DVB; native DVB is copied
+        assert!(pairs.contains(&("-c:s:0".to_owned(), "dvbsub".to_owned())));
         assert!(pairs.contains(&("-c:s:1".to_owned(), "copy".to_owned())));
-        assert!(pairs.contains(&("-c:s:2".to_owned(), "dvdsub".to_owned())));
+        assert!(pairs.contains(&("-c:s:2".to_owned(), "dvbsub".to_owned())));
         for (n, language) in ["eng", "spa", "fre"].iter().enumerate() {
             assert!(
                 pairs.contains(&(format!("-metadata:s:s:{n}"), format!("language={language}")))
@@ -4004,6 +4025,12 @@ mod tests {
             !args
                 .iter()
                 .any(|a| a.contains("overlay") || a.contains("subtitles=")),
+            "{args:?}"
+        );
+        // in-band subtitles use the segment muxer (HLS cannot carry DVB in .ts)
+        assert!(pairs.contains(&("-f".to_owned(), "segment".to_owned())), "{args:?}");
+        assert!(
+            pairs.contains(&("-segment_format".to_owned(), "mpegts".to_owned())),
             "{args:?}"
         );
         let format = args.iter().rposition(|a| a == "-f").unwrap();

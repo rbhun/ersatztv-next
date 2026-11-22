@@ -27,6 +27,8 @@ static SUBTITLE_IMAGE_CODECS: &[&str] = &[
     "vobsub",
     "pgssub",
     "pgs",
+    "dvb_subtitle",
+    "dvbsub",
 ];
 
 static STILL_IMAGE_CODECS: &[&str] = &["png", "mjpeg", "bmp", "tiff"];

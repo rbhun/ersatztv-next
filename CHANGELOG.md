@@ -13,10 +13,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Add `mux` subtitle mode and `normalization.subtitle.tracks` to `channel.json` to mux multiple subtitle tracks into the MPEG-TS stream instead of burning subtitles in (channel config schema `0.1.7`)
   - Each entry sets a track's `language` and `title`; the first describes the primary track
   - Fill the extra tracks per item with `tracks.extra_subtitle` in the playout (playout schema `0.0.10`); unfilled tracks reuse the primary subtitle stream
-  - Subtitles are encoded as DVD subtitles, so text subtitle sources can't be muxed; DVD and DVB subtitles are copied
+  - Image subtitles (PGS/DVD) are encoded as DVB (`dvbsub`); native DVB is copied. Text sources fall back to burn.
+  - Mux mode writes segments with the `segment` muxer because the HLS muxer cannot put bitmap subtitles into `.ts` files
 
 ### Fixed
 - Fix decoding a second audio stream from a source whose primary audio track is downmixed 5.1 AC-3
+- Fix subtitle mux crashing ffmpeg (HLS rejected dvdsub / multiple subtitle tracks; use `segment` + `dvbsub`)
 
 ## [0.2.7] - 2026-11-20
 ### Fixed

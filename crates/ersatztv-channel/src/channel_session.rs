@@ -699,6 +699,9 @@ impl ChannelSession {
                 playlist: self.output_file.clone(),
                 segment_template: self.output_segment_template.clone(),
                 troubleshoot,
+                // HLS muxer cannot carry bitmap/DVB subtitle streams in .ts segments
+                in_band_subtitles: subtitle_mode == SubtitleMode::Mux
+                    && !subtitle_tracks.is_empty(),
             },
             pts_offset: pts_duration.map(|duration| PtsOffset { duration }),
             realtime,
@@ -2374,6 +2377,7 @@ mod tests {
                 playlist: String::from("ffmpeg.m3u8"),
                 segment_template: String::from("live%06d.ts"),
                 troubleshoot: false,
+                in_band_subtitles: false,
             },
             pts_offset: None,
             realtime: false,
